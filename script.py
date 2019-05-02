@@ -7,9 +7,18 @@ import os
 import time
 from Bio import PDB
 import pypdb as pb
+from subprocess import Popen, PIPE
+from threading import Thread
+
 
 from modeller import *
 from modeller.automodel import *
+
+cwd = os.getcwd()
+
+
+def console(args):
+    return Popen(args.split(), stdout=PIPE).communicate()[0].decode("utf-8")
 
 
 class SelectChain(PDB.Select):
@@ -27,19 +36,21 @@ from Bio import BiopythonWarning
 warnings.simplefilter('ignore', BiopythonWarning)
 
 
-def get_chain_pdb(id, chain):
-    cache_path = './cache/' + id + chain + '.pdb'
+def get_chain_pdb(id, chain, cache):
+    cache_path = './cache/data/' + id + chain + '.pdb'
     if os.path.isfile(cache_path):
         return cache_path
+    if cache:
+        print("CACHE MISS WHEN REQUIRED: ", id, chain)
     parser = PDB.PDBParser()
     writer = PDB.PDBIO()
-    writer.set_structure(parser.get_structure(id, get_pdb(id)))
+    writer.set_structure(parser.get_structure(id, get_pdb(id, cache)))
     writer.save(cache_path, select=SelectChain(chain))
     return cache_path
 
 
 def get_chains(id):
-    cache_path = './cache/' + id + '.chains'
+    cache_path = './cache/data/' + id + '.chains'
 
     if os.path.isfile(cache_path):
         with open(cache_path, 'r') as file:
@@ -98,8 +109,9 @@ def get_clusterr_domains(pdb_id):
 
 import xml
 
+
 def get_candidates(id, chains):
-    cache_path = './cache/' + id + chains[0] + '.candidates'
+    cache_path = './cache/data/' + id + chains[0] + '.candidates'
 
     if os.path.isfile(cache_path):
         with open(cache_path, 'r') as file:
@@ -126,28 +138,31 @@ def get_candidates(id, chains):
     return result
 
 
-def get_pdb(id):
+def get_pdb(id, cache):
     if len(id) == 5:
-        return get_chain_pdb(id[:4], id[4])
-    cache_path = './cache/' + id + '.pdb'
+        return get_chain_pdb(id[:4], id[4], cache)
+    cache_path = './cache/data/' + id + '.pdb'
     if os.path.isfile(cache_path):
         return cache_path
     if len(id) != 4:
         print("BAD ID:", id)
+    if cache:
+        print("CACHE MISS WHEN REQUIRED: ", id)
     with open(cache_path, 'a') as file:
         file.write(pb.get_pdb_file(id))
     return cache_path
 
-from subprocess import Popen, PIPE
 
-def tm_align(id1, id2):
-    cache_path = './cache/' + id1 + '_' + id2 + '.ali'
+def tm_align(id1, id2, cache):
+    cache_path = './cache/data/' + id1 + '_' + id2 + '.ali'
     if os.path.isfile(cache_path):
         with open(cache_path, 'r') as file:
             return file.read()
-    process = Popen(["./tmalign_folder/TMalign", get_pdb(id1), get_pdb(id2)],
+
+    process = Popen(["./tmalign_folder/TMalign", get_pdb(id1, cache), get_pdb(id2, cache)],
                     stdout=PIPE, stderr=PIPE)
     stdout, stderr = process.communicate()
+
     result = stdout.decode("utf-8").split('\n')
     if len(result) == 27:
         seq1 = result[22]
@@ -168,15 +183,6 @@ def tm_align(id1, id2):
         result = ""
     return result
 
-
-
-def get_rmsd(id1, id2):
-    result = tm_align(id1, id2)
-    return result.split('\n')[0][2:-1]
-
-
-import threading
-
 global_start_time = 0
 sum_time = 0
 models = 0
@@ -187,76 +193,25 @@ def write_error(target, template):
     with open('./error_candidates.txt', 'a') as file:
         file.write(target + " " + template + "\n")
 
-
-def process_id(id):
-    print("START PROCESSING TARGET: ", id)
-    global global_start_time
-    global sum_time
-    global threads
-    global models
-    global bad_models
-    global cache_models
-    global excluded_models
-    get_pdb(id)
-    candidates = get_candidates(id, get_chains(id)).split("|")
-    target = id + get_chains(id)[0]
-    for candidate in candidates:
-        for tryes in range(10):
-            start_time = time.time()
-            candidate = candidate.split(" ")
-            if len(candidate) < 2:
-                continue
-            template = candidate[0] + candidate[1]
-            try:
-                if target == template:
-                    continue
-                if (target, template) in excluded_models:
-                    cache_models += 1
-                    continue
-                get_chain_pdb(candidate[0], candidate[1])
-                alignment = tm_align(target, template)
-                if len(alignment) == 0:
-                    write_error(target, template)
-                    print("ALIGNMENT ERROR")
-                    bad_models += 1
-                else:
-                    process = Popen(["python3", "./modeller_process.py",
-                                     target, template], stdout=PIPE, stderr=PIPE)
-                    stdout, stderr = process.communicate()
-                    if len(stderr) > 0:
-                        #write_error(target, template)
-                        print("MODELLER ERROR:", stderr)
-                        bad_models += 1
-                    else:
-                        models += 1
-                        sum_time += time.time() - start_time
-                        print("new model:", target, template, "   ",
-                              "cur_time:", time.time() - start_time,
-                              "   ", "models:", str(models) + "/" + str(bad_models) + "/"
-                              + str(cache_models),
-                              "   ", "time per model:", (time.time() - global_start_time) / models)
-            except Exception as e:
-                # write_error(target, template)
-                print("EXCEPTION: ", e)
-                if tryes == 9:
-                    bad_models += 1
-                continue
-            break
-
 def clean():
-    stdout = os.popen("find ./ -type f").read().split("\n")
+    stdout = console("find ./ -type f").split("\n")
     stdout.pop()
     for file in stdout:
         if file.endswith(".rsr") or file.endswith(".ini") or file.endswith(".D00000001") or \
-                file.endswith(".sch"):
-            os.popen("rm " + file)
+                file.endswith(".sch") or file.endswith(".V99990001"):
+            console("rm " + file)
             print("removed: " + file)
-        #if file.startswith("./cache/") and len(file.split("/")) == 3:
-            #os.popen("rm " + file)
-            #print("removed: " + file)
+    stdout = console("find ./cache/data -type f").split("\n")
+    stdout.pop()
+    for file in stdout:
+        #console("rm " + file)
+        pass
+    if os.path.exists("./scripts"):
+        console("rm -r ./scripts")
     return
 
 def get_error_models():
+    return []
     res = []
     with open("./error_candidates.txt", 'r') as file:
         res = file.read().split("\n")
@@ -269,7 +224,7 @@ def get_error_models():
 
 def get_all_generated_models():
     result = set()
-    stdout = os.popen("find ./cache/models -type f").read().split("\n")
+    stdout = console("find ./cache/models -type f").split("\n")
     stdout.pop()
     for model in stdout:
         model = model.split("/")
@@ -279,21 +234,65 @@ def get_all_generated_models():
     return result
 
 
-
-import time
-import threading
+from mpipe import Pipeline, UnorderedStage
 
 
-from multiprocessing import Pool
+def run_modeller(arg):
+    target, template = arg.split()
+    alignment = tm_align(target, template, True)
+    if len(alignment) == 0:
+        print("ALIGNMENT ERROR")
+    else:
+        directory = './scripts/' + target + '_' + template
+        if not os.path.exists(directory):
+            os.makedirs(directory)
 
-def targets_pool(targets):
-    pool = Pool(512)
-    results = pool.map(process_id, targets)
-    pool.close()
-    pool.join()
+        console('cp ./modeller_process.py ' + directory + '/modeller_process.py')
+
+        process = Popen(["python3", "./modeller_process.py",
+                         target, template, cwd], stdout=PIPE, stderr=PIPE, cwd=directory)
+        stdout, stderr = process.communicate()
+
+        console("rm -r " + directory)
+
+        if len(stderr) > 0 or process.returncode != 0:
+            print("MODELLER ERROR:", stderr)
+        else:
+            print("new model:", target, template)
+
+
+pipe = Pipeline(UnorderedStage(run_modeller, 32))
+
+
+def process_id(id):
+    global excluded_models
+    global pipe
+    print("START PROCESSING TARGET: ", id)
+    get_pdb(id, False)
+    candidates = get_candidates(id, get_chains(id)).split("|")
+    target = id + get_chains(id)[0]
+    for candidate_str in candidates:
+        candidate = candidate_str.split(" ")
+        if len(candidate) < 2:
+            continue
+        template = candidate[0] + candidate[1]
+        try:
+            if target == template:
+                continue
+            if (target, template) in excluded_models:
+                print("CACHE:", target, template)
+                continue
+            get_pdb(target, False)
+            get_pdb(template, False)
+            print("Put candidate:", target, template)
+            pipe.put(target + " " + template)
+        except Exception as e:
+            print("EXCEPTION: ", e)
+    return
+
+from multiprocessing.dummy import Pool
 
 def main():
-    global global_start_time
     global excluded_models
     clean()
     excluded_models = get_all_generated_models()
@@ -302,16 +301,15 @@ def main():
 
     time.sleep(5)
 
-    global_start_time = time.time()
-
     targets = []
     with open('./data/sids.txt', 'r') as file:
         for id in file.read().split('\n'):
             targets.append(id)
 
-    targets_pool(targets)
+    with Pool(processes=32) as pool:
+        pool.map(process_id, targets)
 
-    return
+    pipe.put(None)
 
     #t = time.time()
     #c = time.clock()
