@@ -143,7 +143,6 @@ def get_chain_pdb(id, chain):
     return cache_path
 
 
-
 def get_chains(id):
     cache_path = './cache/' + id + '.chains'
 
@@ -271,7 +270,7 @@ def get_all_generated_models():
 
 def main():
     global global_start_time
-    clean()
+    #clean()
     all_models = get_all_generated_models()
     print("All models:", len(all_models))
     time.sleep(5)
