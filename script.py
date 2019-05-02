@@ -6,7 +6,59 @@ from json import loads, dumps
 import os
 import time
 from Bio import PDB
+import pypdb as pb
 
+from modeller import *
+from modeller.automodel import *
+
+
+class SelectChain(PDB.Select):
+    def __init__(self, chain):
+        self.chain = chain
+
+    def accept_residue(self, residue):
+        return 1 if residue.id[0] == " " else 0
+
+    def accept_chain(self, chain):
+        return chain.get_id() == self.chain
+
+import warnings
+from Bio import BiopythonWarning
+warnings.simplefilter('ignore', BiopythonWarning)
+
+
+def get_chain_pdb(id, chain):
+    cache_path = './cache/' + id + chain + '.pdb'
+    if os.path.isfile(cache_path):
+        return cache_path
+    parser = PDB.PDBParser()
+    writer = PDB.PDBIO()
+    writer.set_structure(parser.get_structure(id, get_pdb(id)))
+    writer.save(cache_path, select=SelectChain(chain))
+    return cache_path
+
+
+def get_chains(id):
+    cache_path = './cache/' + id + '.chains'
+
+    if os.path.isfile(cache_path):
+        with open(cache_path, 'r') as file:
+            return file.read()
+
+    chains = []
+    response = pb.get_entity_info(id)['Entity']['Chain']
+    if type(response) != type([]):
+        response = [response]
+
+    for el in response:
+        chains.append(el['@id'])
+
+    chains = "".join(chains)
+
+    with open(cache_path, 'a') as file:
+        file.write(chains)
+
+    return chains
 
 def remove_at_sign(kk):
     tagged_keys = [thing for thing in kk.keys() if thing.startswith('@')]
@@ -97,10 +149,10 @@ def tm_align(id1, id2):
                     stdout=PIPE, stderr=PIPE)
     stdout, stderr = process.communicate()
     result = stdout.decode("utf-8").split('\n')
-    if not len(result) < 25:
-        seq1 = result[18]
-        seq2 = result[20]
-        rmsd = result[12].split("RMSD=")[1].split(',')[0].split(" ")[-1]
+    if len(result) == 27:
+        seq1 = result[22]
+        seq2 = result[24]
+        rmsd = result[16].split("RMSD=")[1].split(',')[0].split(" ")[-1]
         result = []
         result.append("C;" + rmsd)
         result.append(">P1;" + id1)
@@ -112,58 +164,10 @@ def tm_align(id1, id2):
         result = '\n'.join(result)
         with open(cache_path, 'a') as file:
             file.write(result)
-    #else:
-        #print(result)
+    else:
+        result = ""
     return result
 
-
-class SelectChain(PDB.Select):
-    def __init__(self, chain):
-        self.chain = chain
-
-    def accept_residue(self, residue):
-        return len(str(residue).split("het= ")) > 1
-
-    def accept_chain(self, chain):
-        return chain.get_id() == self.chain
-
-import warnings
-from Bio import BiopythonWarning
-warnings.simplefilter('ignore', BiopythonWarning)
-
-
-def get_chain_pdb(id, chain):
-    cache_path = './cache/' + id + chain + '.pdb'
-    if os.path.isfile(cache_path):
-        return cache_path
-    parser = PDB.PDBParser()
-    writer = PDB.PDBIO()
-    writer.set_structure(parser.get_structure(id, get_pdb(id)))
-    writer.save(cache_path, select=SelectChain(chain))
-    return cache_path
-
-
-def get_chains(id):
-    cache_path = './cache/' + id + '.chains'
-
-    if os.path.isfile(cache_path):
-        with open(cache_path, 'r') as file:
-            return file.read()
-
-    chains = []
-    response = pb.get_entity_info(id)['Entity']['Chain']
-    if type(response) != type([]):
-        response = [response]
-
-    for el in response:
-        chains.append(el['@id'])
-
-    chains = "".join(chains)
-
-    with open(cache_path, 'a') as file:
-        file.write(chains)
-
-    return chains
 
 
 def get_rmsd(id1, id2):
@@ -183,55 +187,61 @@ def write_error(target, template):
     with open('./error_candidates.txt', 'a') as file:
         file.write(target + " " + template + "\n")
 
-def process_id(id, all_models):
+
+def process_id(id):
+    print("START PROCESSING TARGET: ", id)
     global global_start_time
     global sum_time
     global threads
     global models
     global bad_models
     global cache_models
+    global excluded_models
     get_pdb(id)
     candidates = get_candidates(id, get_chains(id)).split("|")
     target = id + get_chains(id)[0]
     for candidate in candidates:
-        start_time = time.time()
-        candidate = candidate.split(" ")
-        if len(candidate) < 2:
-            continue
-        template = candidate[0] + candidate[1]
-        try:
-            if target == template:
+        for tryes in range(10):
+            start_time = time.time()
+            candidate = candidate.split(" ")
+            if len(candidate) < 2:
                 continue
-            if (target, template) in all_models:
-                cache_models += 1
-                continue
-            get_chain_pdb(candidate[0], candidate[1])
-            alignment = tm_align(target, template)
-            if len(alignment) < 25:
-                write_error(target, template)
-                print("ALIGNMENT ERROR")
-                bad_models += 1
-            else:
-                process = Popen(["python3", "./modeller_process.py",
-                                 target, template], stdout=PIPE, stderr=PIPE)
-                stdout, stderr = process.communicate()
-                if len(stderr) > 0:
+            template = candidate[0] + candidate[1]
+            try:
+                if target == template:
+                    continue
+                if (target, template) in excluded_models:
+                    cache_models += 1
+                    continue
+                get_chain_pdb(candidate[0], candidate[1])
+                alignment = tm_align(target, template)
+                if len(alignment) == 0:
                     write_error(target, template)
-                    print("MODELLER ERROR")
+                    print("ALIGNMENT ERROR")
                     bad_models += 1
                 else:
-                    models += 1
-                    sum_time += time.time() - start_time
-                    print("new model:", target, template, "   ",
-                          "cur_time:", time.time() - start_time,
-                          "   ", "models:", str(models) + "/" + str(bad_models) + "/"
-                          + str(cache_models),
-                          "   ", "time per model:", (time.time() - global_start_time) / models)
-        except Exception as e:
-            # write_error(target, template)
-            # print("EXCEPTION", e)
-            bad_models += 1
-            continue
+                    process = Popen(["python3", "./modeller_process.py",
+                                     target, template], stdout=PIPE, stderr=PIPE)
+                    stdout, stderr = process.communicate()
+                    if len(stderr) > 0:
+                        #write_error(target, template)
+                        print("MODELLER ERROR:", stderr)
+                        bad_models += 1
+                    else:
+                        models += 1
+                        sum_time += time.time() - start_time
+                        print("new model:", target, template, "   ",
+                              "cur_time:", time.time() - start_time,
+                              "   ", "models:", str(models) + "/" + str(bad_models) + "/"
+                              + str(cache_models),
+                              "   ", "time per model:", (time.time() - global_start_time) / models)
+            except Exception as e:
+                # write_error(target, template)
+                print("EXCEPTION: ", e)
+                if tryes == 9:
+                    bad_models += 1
+                continue
+            break
 
 def clean():
     stdout = os.popen("find ./ -type f").read().split("\n")
@@ -241,9 +251,9 @@ def clean():
                 file.endswith(".sch"):
             os.popen("rm " + file)
             print("removed: " + file)
-        if file.startswith("./cache/") and len(file.split("/")) == 3:
-            os.popen("rm " + file)
-            print("removed: " + file)
+        #if file.startswith("./cache/") and len(file.split("/")) == 3:
+            #os.popen("rm " + file)
+            #print("removed: " + file)
     return
 
 def get_error_models():
@@ -268,29 +278,38 @@ def get_all_generated_models():
         result.add(pair)
     return result
 
+
+
+import time
+import threading
+
+
+from multiprocessing import Pool
+
+def targets_pool(targets):
+    pool = Pool(512)
+    results = pool.map(process_id, targets)
+    pool.close()
+    pool.join()
+
 def main():
     global global_start_time
-    #clean()
-    all_models = get_all_generated_models()
-    print("All models:", len(all_models))
+    global excluded_models
+    clean()
+    excluded_models = get_all_generated_models()
+
+    print("All models:", len(excluded_models))
+
     time.sleep(5)
-    threads_pool = set()
+
     global_start_time = time.time()
+
+    targets = []
     with open('./data/sids.txt', 'r') as file:
         for id in file.read().split('\n'):
-            while True:
-                new_threads_pool = set()
-                for t in threads_pool:
-                    if t.is_alive():
-                        new_threads_pool.add(t)
-                threads_pool = new_threads_pool
-                if len(new_threads_pool) < 64:
-                    break
-                time.sleep(0.01)
-            # print("NEW THREAD:", len(threads_pool) + 1)
-            t = threading.Thread(target=process_id, args=(id,all_models,))
-            t.start()
-            threads_pool.add(t)
+            targets.append(id)
+
+    targets_pool(targets)
 
     return
 

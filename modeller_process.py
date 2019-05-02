@@ -1,4 +1,10 @@
+import pypdb as pb
+import urllib.request
+import urllib.error
+import xmltodict
+from json import loads, dumps
 import os
+import time
 from Bio import PDB
 import pypdb as pb
 
@@ -11,7 +17,7 @@ class SelectChain(PDB.Select):
         self.chain = chain
 
     def accept_residue(self, residue):
-        return len(str(residue).split("het= ")) > 1
+        return 1 if residue.id[0] == " " else 0
 
     def accept_chain(self, chain):
         return chain.get_id() == self.chain
@@ -41,18 +47,21 @@ def get_pdb(id):
         file.write(pb.get_pdb_file(id))
     return cache_path
 
+from subprocess import Popen, PIPE
 
 def tm_align(id1, id2):
     cache_path = './cache/' + id1 + '_' + id2 + '.ali'
     if os.path.isfile(cache_path):
         with open(cache_path, 'r') as file:
             return file.read()
-    cmd = "./tmalign_folder/TMalign " + get_pdb(id1) + ' ' + get_pdb(id2)
-    result = os.popen(cmd).read().split('\n')
-    if not len(result) < 25:
-        seq1 = result[18]
-        seq2 = result[20]
-        rmsd = result[12].split("RMSD=")[1].split(',')[0].split(" ")[-1]
+    process = Popen(["./tmalign_folder/TMalign", get_pdb(id1), get_pdb(id2)],
+                    stdout=PIPE, stderr=PIPE)
+    stdout, stderr = process.communicate()
+    result = stdout.decode("utf-8").split('\n')
+    if len(result) == 27:
+        seq1 = result[22]
+        seq2 = result[24]
+        rmsd = result[16].split("RMSD=")[1].split(',')[0].split(" ")[-1]
         result = []
         result.append("C;" + rmsd)
         result.append(">P1;" + id1)
@@ -65,8 +74,9 @@ def tm_align(id1, id2):
         with open(cache_path, 'a') as file:
             file.write(result)
     else:
-        print(result)
+        result = ""
     return result
+
 
 
 def get_rmsd(id1, id2):
@@ -81,7 +91,7 @@ def generate_model(target, template):
     log.verbose()
     env = environ()
     env.io.atom_files_directory = ['.', './cache']
-
+    allow_alternates=True
     a = automodel(env,
                   alnfile  = './cache/' + target + '_' + template + '.ali',
                   knowns   = template,
