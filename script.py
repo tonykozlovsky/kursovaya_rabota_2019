@@ -306,8 +306,11 @@ def main():
         for id in file.read().split('\n'):
             targets.append(id)
 
-    with Pool(processes=32) as pool:
-        pool.map(process_id, targets)
+    pool = Pool(processes=32)
+    proclist = [ pool.apply_async(process_id, [target]) for target in targets ]
+    for res in proclist:
+        res.get()
+    pool.close()
 
     pipe.put(None)
 
