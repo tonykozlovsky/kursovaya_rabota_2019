@@ -290,7 +290,65 @@ def process_id(id):
             print("EXCEPTION: ", e)
     return
 
-from multiprocessing.dummy import Pool
+class BaseThread(Thread):
+    def __init__(self, callback=None, callback_args=None, *args, **kwargs):
+        target = kwargs.pop('target')
+        super(BaseThread, self).__init__(target=self.target_with_callback, *args, **kwargs)
+        self.callback = callback
+        self.method = target
+        self.callback_args = callback_args
+
+    def target_with_callback(self, *args):
+        self.method(*args)
+        if self.callback is not None:
+            self.callback(*self.callback_args)
+
+
+from threading import Lock
+import threading
+
+
+class MTQ():
+    def __init__(self, target, max_threads):
+        self.mutex = Lock()
+        self.target = target
+        self.max_threads = max_threads
+        self.all_threads = []
+        self.threads = set()
+        self.tasks = []
+
+    def cb(self):
+        self.mutex.acquire()
+        current_thread = threading.current_thread()
+        if current_thread in self.threads:
+            self.threads.remove(current_thread)
+
+        while len(self.threads) < self.max_threads and len(self.tasks) > 0:
+            t = BaseThread(target=self.target,
+                           args=(self.tasks[-1],),
+                           callback=self.cb,
+                           callback_args=())
+            self.threads.add(t)
+            self.all_threads.append(t)
+            self.tasks.pop()
+            t.start()
+
+        self.mutex.release()
+
+    def add(self, arg):
+        self.mutex.acquire()
+        self.tasks.append(arg)
+        self.mutex.release()
+        self.cb()
+
+    def join(self):
+        for t in self.all_threads:
+            t.join()
+
+    def kill(self):
+        for t in self.all_threads:
+            t.terminate()
+
 
 def main():
     global excluded_models
@@ -306,11 +364,12 @@ def main():
         for id in file.read().split('\n'):
             targets.append(id)
 
-    pool = Pool(processes=32)
-    proclist = [ pool.apply_async(process_id, [target]) for target in targets ]
-    for res in proclist:
-        res.get()
-    pool.close()
+    mtq = MTQ(process_id, 32)
+
+    for target in targets:
+        mtq.add(target)
+
+    mtq.join()
 
     pipe.put(None)
 
