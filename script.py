@@ -183,12 +183,6 @@ def tm_align(id1, id2, cache):
         result = ""
     return result
 
-global_start_time = 0
-sum_time = 0
-models = 0
-bad_models = 0
-cache_models = 0
-
 def write_error(target, template):
     with open('./error_candidates.txt', 'a') as file:
         file.write(target + " " + template + "\n")
@@ -201,6 +195,12 @@ def clean():
                 file.endswith(".sch") or file.endswith(".V99990001"):
             console("rm " + file)
             print("removed: " + file)
+        #if file.endswith(".gz.gz"):
+        #    console("rm " + file)
+        #    print("removed: " + file)
+        #if file.endswith(".pdb") and file.startswith("./cache/models/"):
+        #    console("rm " + file)
+        #    print("removed: " + file)
     stdout = console("find ./cache/data -type f").split("\n")
     stdout.pop()
     for file in stdout:
@@ -238,6 +238,7 @@ from mpipe import Pipeline, UnorderedStage
 
 
 def run_modeller(arg):
+    start = time.time()
     target, template = arg.split()
     alignment = tm_align(target, template, True)
     if len(alignment) == 0:
@@ -259,14 +260,36 @@ def run_modeller(arg):
             print("MODELLER ERROR:", stderr)
         else:
             print("new model:", target, template)
+            return ("ok", time.time() - start)
+    return ("bad", 0)
 
+processes_number = 48
+pipe = Pipeline(UnorderedStage(run_modeller, processes_number))
 
-pipe = Pipeline(UnorderedStage(run_modeller, 32))
+waiting_candidates = 0
+processed_candidates = 0
+sum_time = 0
 
+def get_pipe():
+    global pipe
+    global waiting_candidates
+    global sum_time
+    global processed_candidates
+    res = pipe.get()
+    waiting_candidates -= 1
+    if res[0] == "ok":
+        processed_candidates += 1
+        sum_time += res[1]
+    print("QUEUE:", waiting_candidates,
+        "time:", sum_time / max(1, processed_candidates) / processes_number)
+    return
 
 def process_id(id):
     global excluded_models
     global pipe
+    global waiting_candidates
+    global sum_time
+    global processed_candidates
     print("START PROCESSING TARGET: ", id)
     get_pdb(id, False)
     candidates = get_candidates(id, get_chains(id)).split("|")
@@ -280,12 +303,20 @@ def process_id(id):
             if target == template:
                 continue
             if (target, template) in excluded_models:
-                print("CACHE:", target, template)
+                #print("CACHE:", target, template)
                 continue
             get_pdb(target, False)
             get_pdb(template, False)
-            print("Put candidate:", target, template)
+            #print("Put candidate:", target, template)
             pipe.put(target + " " + template)
+            waiting_candidates += 1
+            print("QUEUE:", waiting_candidates,
+                  "time:", sum_time / max(1, processed_candidates) / processes_number)
+            while threading.active_count() > 1000:
+                time.sleep(1)
+            t = Thread(target=get_pipe)
+            t.start()
+
         except Exception as e:
             print("EXCEPTION: ", e)
     return
@@ -306,7 +337,7 @@ class BaseThread(Thread):
 
 from threading import Lock
 import threading
-
+import queue
 
 class MTQ():
     def __init__(self, target, max_threads):
@@ -315,7 +346,7 @@ class MTQ():
         self.max_threads = max_threads
         self.all_threads = []
         self.threads = set()
-        self.tasks = []
+        self.tasks = queue.Queue()
 
     def cb(self):
         self.mutex.acquire()
@@ -323,21 +354,21 @@ class MTQ():
         if current_thread in self.threads:
             self.threads.remove(current_thread)
 
-        while len(self.threads) < self.max_threads and len(self.tasks) > 0:
+        while len(self.threads) < self.max_threads and self.tasks.qsize() > 0:
             t = BaseThread(target=self.target,
-                           args=(self.tasks[-1],),
+                           args=(self.tasks.get(),),
                            callback=self.cb,
                            callback_args=())
+            print("LOAD REMAINING:", self.tasks.qsize())
             self.threads.add(t)
             self.all_threads.append(t)
-            self.tasks.pop()
             t.start()
 
         self.mutex.release()
 
     def add(self, arg):
         self.mutex.acquire()
-        self.tasks.append(arg)
+        self.tasks.put(arg)
         self.mutex.release()
         self.cb()
 
@@ -352,6 +383,7 @@ class MTQ():
 
 def main():
     global excluded_models
+    global processes_number
     clean()
     excluded_models = get_all_generated_models()
 
@@ -363,8 +395,10 @@ def main():
     with open('./data/sids.txt', 'r') as file:
         for id in file.read().split('\n'):
             targets.append(id)
+    if processes_number == 12:
+        targets.reverse()
 
-    mtq = MTQ(process_id, 32)
+    mtq = MTQ(process_id, processes_number)
 
     for target in targets:
         mtq.add(target)

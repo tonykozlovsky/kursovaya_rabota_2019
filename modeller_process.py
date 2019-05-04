@@ -12,6 +12,9 @@ import sys
 from modeller import *
 from modeller.automodel import *
 
+def console(args):
+    return Popen(args.split(), stdout=PIPE).communicate()[0].decode("utf-8")
+
 cwd = "kek"
 
 def get_chain_pdb(id, chain):
@@ -58,7 +61,7 @@ def generate_model(target, template, arg_cwd):
     if not os.path.isfile(alnfile):
         sys.stderr.write("NO ALN FILE: " + alnfile)
         sys.exit(228)
-    log.none()
+    log.verbose()
     env = environ()
     env.io.atom_files_directory = ['.', cwd + '/cache/data']
     a = automodel(env,
@@ -77,6 +80,7 @@ def generate_model(target, template, arg_cwd):
         os.makedirs(directory)
 
     os.rename(cwd + '/cache/data/' + target + '.model' + template + '.pdb', directory + template + '.pdb')
+    console("pigz --best -f -q " +  directory + template + '.pdb')
     os.remove(target + '.D00000001')
     os.remove(target + '.ini')
     os.remove(target + '.rsr')
