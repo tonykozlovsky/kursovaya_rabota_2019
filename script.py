@@ -66,7 +66,7 @@ def get_chains(id):
 
     chains = "".join(chains)
 
-    with open(cache_path, 'a') as file:
+    with open(cache_path, 'w') as file:
         file.write(chains)
 
     return chains
@@ -132,15 +132,15 @@ def get_candidates(id, chains):
 
     result = '|'.join(result)
 
-    with open(cache_path, 'a') as file:
+    with open(cache_path, 'w') as file:
         file.write(result)
 
     return result
 
 
 def get_pdb(id, cache):
-    if len(id) == 5:
-        return get_chain_pdb(id[:4], id[4], cache)
+    if len(id) > 4:
+        return get_chain_pdb(id[:4], id[4:], cache)
     cache_path = './cache/data/' + id + '.pdb'
     if os.path.isfile(cache_path):
         return cache_path
@@ -148,8 +148,9 @@ def get_pdb(id, cache):
         print("BAD ID:", id)
     if cache:
         print("CACHE MISS WHEN REQUIRED: ", id)
-    with open(cache_path, 'a') as file:
-        file.write(pb.get_pdb_file(id))
+    with open(cache_path + ".gz", 'wb') as file:
+        file.write(pb.get_pdb_file(id, compression=True))
+    console("unpigz -f -q " + cache_path + ".gz")
     return cache_path
 
 
@@ -177,15 +178,11 @@ def tm_align(id1, id2, cache):
         result.append("structure:" + id2 + ":.:.:.:.::::")
         result.append(seq2 + '*')
         result = '\n'.join(result)
-        with open(cache_path, 'a') as file:
+        with open(cache_path, 'w') as file:
             file.write(result)
     else:
         result = ""
     return result
-
-def write_error(target, template):
-    with open('./error_candidates.txt', 'a') as file:
-        file.write(target + " " + template + "\n")
 
 def clean():
     stdout = console("find ./ -type f").split("\n")
@@ -204,23 +201,12 @@ def clean():
     stdout = console("find ./cache/data -type f").split("\n")
     stdout.pop()
     for file in stdout:
-        #console("rm " + file)
+        console("rm " + file)
+        print("removed: " + file)
         pass
     if os.path.exists("./scripts"):
         console("rm -r ./scripts")
     return
-
-def get_error_models():
-    return []
-    res = []
-    with open("./error_candidates.txt", 'r') as file:
-        res = file.read().split("\n")
-        res.pop()
-    error_candidates = []
-    for line in res:
-        ec = line.split(" ")
-        error_candidates.append((ec[0], ec[1]))
-    return error_candidates
 
 def get_all_generated_models():
     result = set()
@@ -229,13 +215,9 @@ def get_all_generated_models():
     for model in stdout:
         model = model.split("/")
         result.add((model[3], model[5].split(".")[0]))
-    for pair in get_error_models():
-        result.add(pair)
     return result
 
-
 from mpipe import Pipeline, UnorderedStage
-
 
 def run_modeller(arg):
     start = time.time()
@@ -284,6 +266,9 @@ def get_pipe():
         "time:", sum_time / max(1, processed_candidates) / processes_number)
     return
 
+import sys
+import traceback
+
 def process_id(id):
     global excluded_models
     global pipe
@@ -317,6 +302,8 @@ def process_id(id):
             t = Thread(target=get_pipe)
             t.start()
 
+        except urllib.error.HTTPError as e:
+            print("HTTP: ", e.url)
         except Exception as e:
             print("EXCEPTION: ", e)
     return

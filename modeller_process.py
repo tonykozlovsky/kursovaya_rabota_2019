@@ -28,8 +28,8 @@ def get_chain_pdb(id, chain):
 
 def get_pdb(id):
     global cwd
-    if len(id) == 5:
-        return get_chain_pdb(id[:4], id[4])
+    if len(id) > 4:
+        return get_chain_pdb(id[:4], id[4:])
     cache_path = cwd + '/cache/data/' + id + '.pdb'
     if os.path.isfile(cache_path):
         return cache_path
