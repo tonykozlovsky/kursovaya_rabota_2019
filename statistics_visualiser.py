@@ -15,6 +15,7 @@ def main():
     number_of_models_with_rmsd = defaultdict(int)
     model_diapason = defaultdict(int)
     models = set()
+    print(len(stdout))
     for model in stdout:
         model = model.split("/")
         number_of_models_for_id[model[3]] += 1
@@ -27,22 +28,22 @@ def main():
         model_diapason[(model[3], diap)] += 1
         #number_of_models_with_rmsd[rmsd] += 1
         result.add((model[3], model[5].split(".")[0]))
-    mbydip = defaultdict(int)
+    mbydip = defaultdict(list)
     for model in models:
         maxdi = 0
         for di in range(1, 10):
             if not (model, di) in model_diapason:
                 break
             maxdi = di
-        mbydip[maxdi] += 1
-        if maxdi > 0:
-            print(model, maxdi)
-    vals =          []
+        mbydip[maxdi].append(model)
+        #if maxdi > 0:
+            #print(model, maxdi)
+    vals = []
     for key in sorted(mbydip)[1:]:
         print(key, mbydip[key])
         vals.append(mbydip[key])
-    plt.plot(sorted(mbydip)[1:], vals)
-    plt.show()
+    #plt.plot(sorted(mbydip)[1:], vals)
+    #plt.show()
     #for key in model_diapason:
         #print(key)
     return
